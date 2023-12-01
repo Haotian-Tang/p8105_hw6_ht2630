@@ -1,0 +1,6 @@
+---
+title: "p8105_hw6_ht2630"
+author: "Haotian Tang"
+date: "`r Sys.Date()`"
+output: github_document
+---
