@@ -13,14 +13,7 @@ library(broom)
 library(modelr)
 library(purrr)
 library(stats)
-
-knitr::opts_chunk$set(
-	echo = TRUE,
-	warning = FALSE,
-  fig.width = 6,
-  fig.asp = .6,
-  out.width = "90%"
-)
+library(boot)
 ```
 
 
@@ -28,7 +21,7 @@ Problem 1
 
 ```{r}
 homicide_df = 
-  read_csv("homicide_data.csv", na = c("", "NA", "Unknown")) |>
+  read_csv("data/homicide_data.csv", na = c("", "NA", "Unknown")) |>
   unite(city_state,c(city,state),sep = ', ') |>
   mutate(resolution = case_when(
       disposition == "Closed without arrest" ~ 0,
@@ -86,3 +79,126 @@ model_results |>
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
 
+
+Problem 2
+
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2022-01-01",
+    date_max = "2022-12-31") |>
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) |>
+  select(name, id, everything())
+```
+
+```{r}
+lm_model = function(data, indices) {
+  d = data[indices, ]
+  fit = lm(tmax ~ tmin + prcp, data = d)
+  r_squared = glance(fit)$r.squared
+  beta_estimates = tidy(fit)
+  beta_product = beta_estimates$estimate[2] * beta_estimates$estimate[3]
+
+  if(beta_product <= 0) {
+    log_beta_product = NA
+  } else {
+    log_beta_product = log(beta_product)
+  }
+
+  return(c(r_squared, log_beta_product))
+}
+
+set.seed(123)
+results = boot(data = weather_df, statistic = lm_model, R = 5000)
+
+r_squared_bootstrap = results$t[,1]
+log_beta_product_bootstrap = results$t[,2]
+
+r_squared_bootstrap = r_squared_bootstrap[is.finite(r_squared_bootstrap)]
+log_beta_product_bootstrap = log_beta_product_bootstrap[is.finite(log_beta_product_bootstrap)]
+
+if(length(r_squared_bootstrap) < 100 || length(log_beta_product_bootstrap) < 100) {
+  stop("Not enough finite bootstrap samples for analysis.")
+}
+```
+
+
+```{r}
+ggplot() +
+  geom_histogram(aes(x = r_squared_bootstrap), binwidth = 0.01, fill = "blue", alpha = 0.5) +
+  ggtitle("Bootstrap Distribution of r^2") +
+  xlab("r^2") +
+  ylab("Frequency")
+ggsave("r_squared_distribution.png", width = 8, height = 6)
+
+ggplot() +
+  geom_histogram(aes(x = log_beta_product_bootstrap), binwidth = 0.1, fill = "red", alpha = 0.5) +
+  ggtitle("Bootstrap Distribution of log(beta1*beta2)") +
+  xlab("log(beta1*beta2)") +
+  ylab("Frequency")
+ggsave("log_beta_product_distribution.png", width = 8, height = 6)
+
+ci_r_squared = quantile(r_squared_bootstrap, c(0.025, 0.975), na.rm = TRUE)
+ci_log_beta_product = quantile(log_beta_product_bootstrap, c(0.025, 0.975), na.rm = TRUE)
+
+ci_r_squared
+ci_log_beta_product
+```
+
+1. The bootstrap distribution of log beta product shows a multimodal and left-skewed distribution with several peaks, which may indicate the presence of multiple common values on the larger values. And the range of distribution is ver wide, which suggests a relatively high variability. 
+
+2. The bootstrap distribution of r squared shows nimodal, slightly left-skewed but nearly uniform distribution and The peak of the distribution is quite sharp at 0.920. Compared to the bootstrap distribution of log beta product, it has lower variablility. 
+
+
+Problem 3 
+
+```{r}
+birthweight_df = read_csv("data/birthweight.csv")
+
+birthweight_df = birthweight_df |>
+  mutate(
+    babysex = as.factor(babysex),
+    frace = as.factor(frace),
+    malform = as.factor(malform),
+    mrace = as.factor(mrace)
+  ) |> 
+  drop_na()
+
+model_1 = lm(bwt ~ gaweeks + malform + ppwt + ppbmi + smoken + momage + mrace + frace, data = birthweight_df)
+model_2 = lm(bwt ~ blength + gaweeks, data = birthweight_df)
+model_3 = lm(bwt ~ bhead * blength * babysex, data = birthweight_df)
+```
+
+
+```{r}
+birthweight_df = birthweight_df |>
+  add_predictions(model_1, var = "pred") |>
+  add_residuals(model_1, var = "resid")
+
+ggplot(birthweight_df, aes(x = pred, y = resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Residuals")
+ggsave("Residuals vs Fitted Values.png", width = 8, height = 6)
+
+```
+
+```{r}
+cv_rmse = function(model_formula, data) {
+  cv_results = cv.glm(data, glm(model_formula, data = data), K = 10)
+  return(sqrt(cv_results$delta[1]))
+}
+
+cv_rmse_1 = cv_rmse(formula(model_1), birthweight_df)
+cv_rmse_2 = cv_rmse(formula(model_2), birthweight_df)
+cv_rmse_3 = cv_rmse(formula(model_3), birthweight_df)
+
+list(cv_rmse_1 = cv_rmse_1, cv_rmse_2 = cv_rmse_2, cv_rmse_3 = cv_rmse_3)
+```
+
+The MSE of three models are `r cv_rmse_1`, `r cv_rmse_2`, and `r cv_rmse_3`. The third model, which includes head circumference, length, sex, and all their interaction terms, has the lowest cross-validated prediction error. It indicates the third model might be the best at predicting the birth weight. In addition, the second model also has lower MSE than the first one, suggesting that length at birth and gestational age are robust predictors of birth weight. The reason why the first model has highest MSE might be overfitting since it includes too many variables. 
